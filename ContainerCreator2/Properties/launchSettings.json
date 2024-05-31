@@ -1,0 +1,9 @@
+{
+  "profiles": {
+    "ContainerCreator2": {
+      "commandName": "Project",
+      "commandLineArgs": "--port 7110",
+      "launchBrowser": false
+    }
+  }
+}
