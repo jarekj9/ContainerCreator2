@@ -10,7 +10,7 @@ var host = new HostBuilder()
     {
         services.AddApplicationInsightsTelemetryWorkerService();
         services.ConfigureFunctionsApplicationInsights();
-        services.AddScoped<IContainerManagerService, ContainerManagerService>();
+        services.AddSingleton<IContainerManagerService, ContainerManagerService>();
     })
     .Build();
 

@@ -75,6 +75,7 @@ namespace ContainerCreator2.Service
                 Ip = ip,
                 Port = port,
                 OwnerId = Guid.TryParse(ownerId, out var parsedId) ? parsedId : Guid.Empty,
+                CreatedTime = DateTime.UtcNow,
                 RandomPassword = randomPassword
             };
 

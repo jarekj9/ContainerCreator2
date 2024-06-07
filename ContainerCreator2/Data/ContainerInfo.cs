@@ -9,6 +9,7 @@
         public string Ip { get; set; }
         public int Port { get; set; }
         public Guid OwnerId { get; set; }
+        public DateTime CreatedTime { get; set; }
         public string RandomPassword { get; set; }
     }
 }
