@@ -4,8 +4,9 @@ namespace ContainerCreator2.Service.Abstract
 {
     public interface IContainerManagerService
     {
-        Task<ContainerInfo> CreateContainer(string ownerId, string dnsNameLabel, string urlToOpenEncoded);
+        Task<ContainerInfo> CreateContainer(ContainerRequest containerRequest);
         Task<List<ContainerInfo>> ShowContainers();
-        Task<bool> DeleteContainers();
+        Task<bool> DeleteAllContainerGroups();
+        Task<bool> DeleteContainerGroup(string containerGroupName);
     }
 }

@@ -38,9 +38,12 @@ namespace ContainerCreator2
             [DurableClient] DurableTaskClient client,
             [FromQuery] string dnsNameLabel, [FromQuery] string urlToOpenEncoded, [FromQuery] string ownerId = "00000000-0000-0000-0000-000000000000")
         {
-            var containerInfo = await containerManagerService.CreateContainer(ownerId, dnsNameLabel, urlToOpenEncoded);
+            var containerRequest = new ContainerRequest() { 
+                Id = Guid.NewGuid(), OwnerId = ownerId, DnsNameLabel = dnsNameLabel, UrlToOpenEncoded = urlToOpenEncoded 
+            };
+            var containerInfo = await containerManagerService.CreateContainer(containerRequest);
             var entityId = new EntityInstanceId(nameof(ContainersDurableEntity), "containers");
-            await client.Entities.SignalEntityAsync(entityId, "Add", containerInfo);
+            await client.Entities.SignalEntityAsync(entityId, nameof(ContainersDurableEntity.Add), containerInfo);
 
             logger.LogInformation("C# HTTP trigger function processed a request.");
             var response = new StringBuilder("Container created:\n");
@@ -76,10 +79,10 @@ namespace ContainerCreator2
         public async Task<IActionResult> DeleteContainers([HttpTrigger(AuthorizationLevel.Function, "get", "post")] HttpRequest req,
             [DurableClient] DurableTaskClient client)
         {
-            var hasCompleted = await containerManagerService.DeleteContainers();
+            var hasCompleted = await containerManagerService.DeleteAllContainerGroups();
 
             var entityId = new EntityInstanceId(nameof(ContainersDurableEntity), "containers");
-            await client.Entities.SignalEntityAsync(entityId, "Reset");
+            await client.Entities.SignalEntityAsync(entityId, nameof(ContainersDurableEntity.Reset));
 
             logger.LogInformation("C# HTTP trigger function processed a request.");
             return new OkObjectResult($"Deleted containers: {hasCompleted}");
@@ -90,9 +93,9 @@ namespace ContainerCreator2
         public async Task ShutAllContainersDaily([TimerTrigger("0 0 1 * * *")] TimerInfo timerInfo, FunctionContext context,
             [DurableClient] DurableTaskClient client)
         {
-            var hasCompleted = await containerManagerService.DeleteContainers();
+            var hasCompleted = await containerManagerService.DeleteAllContainerGroups();
             var entityId = new EntityInstanceId(nameof(ContainersDurableEntity), "containers");
-            await client.Entities.SignalEntityAsync(entityId, "Reset");
+            await client.Entities.SignalEntityAsync(entityId, nameof(ContainersDurableEntity.Reset));
             logger.LogWarning($"Automatically deleted containers if any existed: {hasCompleted}");
         }
 
@@ -100,48 +103,42 @@ namespace ContainerCreator2
         // As orchestration:////////////////////////////////////////////////////////////////////////////////////////
 
         [Function("Orchestrate")]
-        public async Task<List<string>> Orchestrate(
+        public async Task<bool> Orchestrate(
             [OrchestrationTrigger] TaskOrchestrationContext context)
         {
-            var containerRequestData = context.GetInput<ContainerRequestData>();
-            var outputs = new List<string>();
-            outputs.Add(await context.CallActivityAsync<string>(nameof(CreateContainerAsActivity), containerRequestData));
+            var containerRequest = context.GetInput<ContainerRequest>();
+            var containerInfo = await context.CallActivityAsync<ContainerInfo>(nameof(CreateContainerAsActivity), containerRequest);
             context.SetCustomStatus($"Container Created {DateTime.UtcNow} UTC");
 
-            var waitDuration = TimeSpan.FromMinutes(10);
+            var waitDuration = TimeSpan.FromMinutes(20);
             await context.CreateTimer(waitDuration, CancellationToken.None);
 
-            outputs.Add(await context.CallActivityAsync<string>(nameof(StopContainerAsActivity), containerRequestData));
+            await context.CallActivityAsync<string>(nameof(DeleteContainerAsActivity), containerInfo);
 
-            return outputs;
+            return true;
         }
 
         [Function(nameof(CreateContainerAsActivity))]
-        public async Task<string> CreateContainerAsActivity([ActivityTrigger] ContainerRequestData containerRequestData,
+        public async Task<ContainerInfo> CreateContainerAsActivity([ActivityTrigger] ContainerRequest containerRequest,
             [DurableClient] DurableTaskClient client)
         {
-            var containerInfo = await containerManagerService.CreateContainer(
-                containerRequestData.OwnerId, containerRequestData.DnsNameLabel, containerRequestData.UrlToOpenEncoded
-            );
+            var containerInfo = await containerManagerService.CreateContainer(containerRequest);
             var entityId = new EntityInstanceId(nameof(ContainersDurableEntity), "containers");
-            await client.Entities.SignalEntityAsync(entityId, "Add", containerInfo);
+            await client.Entities.SignalEntityAsync(entityId, nameof(ContainersDurableEntity.Add), containerInfo);
 
             logger.LogInformation("C# HTTP trigger function processed a request.");
-            var response = new StringBuilder("Container created:\n");
-            response.Append($"container group name: {containerInfo.ContainerGroupName}, url: {containerInfo.Fqdn}:{containerInfo.Port}\n");
-            response.Append($"ip: {containerInfo.Ip}, password: {containerInfo.RandomPassword}");
-            return response.ToString();
+            return containerInfo;
         }
 
-        [Function(nameof(StopContainerAsActivity))]
-        public async Task<string> StopContainerAsActivity([ActivityTrigger] ContainerRequestData containerRequestData,
+        [Function(nameof(DeleteContainerAsActivity))]
+        public async Task<string> DeleteContainerAsActivity([ActivityTrigger] ContainerInfo containerInfo,
             [DurableClient] DurableTaskClient client)
         {
-            var hasCompleted = await containerManagerService.DeleteContainers();
+            var hasCompleted  = await containerManagerService.DeleteContainerGroup(containerInfo.ContainerGroupName);
             var entityId = new EntityInstanceId(nameof(ContainersDurableEntity), "containers");
-            await client.Entities.SignalEntityAsync(entityId, "Reset");
-            logger.LogInformation("Deleting containers");
-            return $"Deleted containers: {hasCompleted}";
+            await client.Entities.SignalEntityAsync(entityId, nameof(ContainersDurableEntity.Delete), containerInfo);
+            logger.LogInformation($"Deleted container group {containerInfo.ContainerGroupName}");
+            return $"Deleted container group {containerInfo.ContainerGroupName}: {hasCompleted}";
         }
 
         [Function(nameof(GetOrchestrationStatus))]
@@ -158,8 +155,9 @@ namespace ContainerCreator2
             [DurableClient] DurableTaskClient client,
             [FromQuery] string dnsNameLabel, [FromQuery] string urlToOpenEncoded, [FromQuery] string ownerId = "00000000-0000-0000-0000-000000000000")
         {
-            var containerInfo = new ContainerRequestData()
+            var containerInfo = new ContainerRequest()
             {
+                Id = Guid.NewGuid(),
                 DnsNameLabel = dnsNameLabel,
                 UrlToOpenEncoded = urlToOpenEncoded,
                 OwnerId = ownerId
@@ -197,8 +195,8 @@ namespace ContainerCreator2
     {
         public List<ContainerInfo> Containers { get; set; } = new List<ContainerInfo>();
 
-        public void Add(ContainerInfo newContainer) => this.Containers.Add(newContainer);
-
+        public void Add(ContainerInfo containerInfo) => this.Containers.Add(containerInfo);
+        public void Delete(ContainerInfo containerInfo) => this.Containers.Remove(containerInfo);
         public void Reset() => this.Containers.Clear();
 
         public List<ContainerInfo> Get() => this.Containers;

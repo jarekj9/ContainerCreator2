@@ -4,6 +4,7 @@ using Azure.Identity;
 using Azure.ResourceManager;
 using Azure.ResourceManager.ContainerInstance;
 using Azure.ResourceManager.ContainerInstance.Models;
+using Azure.ResourceManager.Resources;
 using ContainerCreator2.Data;
 using ContainerCreator2.Service.Abstract;
 using Microsoft.DurableTask.Entities;
@@ -33,25 +34,27 @@ namespace ContainerCreator2.Service
             this.containerImage = this.configuration["ContainerImage"] ?? "";
         }
 
-        public async Task<ContainerInfo> CreateContainer(string ownerId, string dnsNameLabel, string urlToOpenEncoded)
+        public async Task<ContainerInfo> CreateContainer(ContainerRequest containerRequest)
         {
             var containerGroupName = $"containergroup-{RandomPasswordGenerator.CreateRandomPassword(7, useSpecialChars: false)}";
             var randomPassword = RandomPasswordGenerator.CreateRandomPassword();
-            var containerGroupCollection = await GetContainerGroupsFromResourceGroup(this.resourceGroupName);
+            var containerGroupCollection = await GetContainerGroupsFromResourceGroup();
             var containerResource = new ContainerResourceRequestsContent(1, 1);
             var requirements = new ContainerResourceRequirements(containerResource);
             var ipAddress = new ContainerGroupIPAddress(new List<ContainerGroupPort>() { new ContainerGroupPort(8080) }, ContainerGroupIPAddressType.Public)
             {
-                DnsNameLabel = dnsNameLabel
+                DnsNameLabel = containerRequest.DnsNameLabel
             };
             var container = new ContainerInstanceContainer("container", this.containerImage, requirements)
             {
                 Ports = { new ContainerPort(8080) },
                 EnvironmentVariables = { new ContainerEnvironmentVariable("VNCPASS") { SecureValue = randomPassword } }
             };
-            if (!string.IsNullOrEmpty(urlToOpenEncoded))
+            if (!string.IsNullOrEmpty(containerRequest.UrlToOpenEncoded))
             {
-                container.EnvironmentVariables.Add(new ContainerEnvironmentVariable("URL_TO_OPEN") { Value = HttpUtility.UrlDecode(urlToOpenEncoded) });
+                container.EnvironmentVariables.Add(new ContainerEnvironmentVariable("URL_TO_OPEN") { 
+                    Value = HttpUtility.UrlDecode(containerRequest.UrlToOpenEncoded) 
+                });
             }
             var containers = new List<ContainerInstanceContainer> { container };
             var data = new ContainerGroupData(AzureLocation.NorthEurope, containers, ContainerInstanceOperatingSystemType.Linux)
@@ -68,13 +71,14 @@ namespace ContainerCreator2.Service
             var entityId = new EntityInstanceId(nameof(ContainersDurableEntity), "containers");
             var containerInfo = new ContainerInfo()
             {
+                Id = Guid.NewGuid(),
                 ContainerGroupName = containerGroupName,
                 Image = this.containerImage,
                 Name = name,
                 Fqdn = fqdn,
                 Ip = ip,
                 Port = port,
-                OwnerId = Guid.TryParse(ownerId, out var parsedId) ? parsedId : Guid.Empty,
+                OwnerId = Guid.TryParse(containerRequest.OwnerId, out var parsedId) ? parsedId : Guid.Empty,
                 CreatedTime = DateTime.UtcNow,
                 RandomPassword = randomPassword
             };
@@ -84,7 +88,7 @@ namespace ContainerCreator2.Service
 
         public async Task<List<ContainerInfo>> ShowContainers()
         {
-            var containerGroupCollection = await GetContainerGroupsFromResourceGroup(this.resourceGroupName);
+            var containerGroupCollection = await GetContainerGroupsFromResourceGroup();
 
             var containerInfos = new List<ContainerInfo>();
             foreach (var containerGroup in containerGroupCollection)
@@ -102,29 +106,52 @@ namespace ContainerCreator2.Service
             return containerInfos;
         }
 
-        public async Task<bool> DeleteContainers()
+        public async Task<bool> DeleteAllContainerGroups()
         {
-            var containerGroupCollection = await GetContainerGroupsFromResourceGroup(this.resourceGroupName);
+            var containerGroupCollection = await GetContainerGroupsFromResourceGroup();
             bool hasCompleted = true;
             foreach (var containerGroup in containerGroupCollection)
             {
                 var containerGroupName = containerGroup?.Data?.Name;
+                if (containerGroupName == null)
+                {
+                    continue;
+                }
                 var result = await containerGroup.DeleteAsync(WaitUntil.Completed);
                 hasCompleted = hasCompleted && result.HasCompleted;
             }
             return hasCompleted;
         }
 
-        private async Task<ContainerGroupCollection> GetContainerGroupsFromResourceGroup(string resourceGroupName)
+        public async Task<bool> DeleteContainerGroup(string containerGroupName)
+        {
+            var containerGroup = await GetContainerByName(containerGroupName);
+            var result = await containerGroup.DeleteAsync(WaitUntil.Completed);
+            return result.HasCompleted;
+        }
+
+        private async Task<ContainerGroupCollection> GetContainerGroupsFromResourceGroup()
+        {
+            var resourceGroup = await GetResourceGroup();
+            var containerGroupCollection = resourceGroup.GetContainerGroups();
+            return containerGroupCollection;
+        }
+
+        private async Task<ContainerGroupResource> GetContainerByName(string containerGroupName)
+        {
+            var resourceGroup = await GetResourceGroup();
+            var containerGroup = resourceGroup.GetContainerGroup(containerGroupName);
+            return containerGroup;
+        }
+
+        private async Task<ResourceGroupResource> GetResourceGroup()
         {
             var clientCredential = new ClientSecretCredential(this.tenantId, this.clientId, this.clientSecret);
             ArmClient armClient = new ArmClient(clientCredential);
             var subscription = await armClient.GetSubscriptions().GetAsync(configuration["SubscriptionId"]).ConfigureAwait(false);
             var resourceGroupCollection = subscription.Value.GetResourceGroups();
-            var resourceGroup = await resourceGroupCollection.GetAsync(resourceGroupName).ConfigureAwait(false);
-            var containerGroupCollection = resourceGroup.Value.GetContainerGroups();
-
-            return containerGroupCollection;
+            var resourceGroup = await resourceGroupCollection.GetAsync(this.resourceGroupName).ConfigureAwait(false);
+            return resourceGroup;
         }
 
     }
