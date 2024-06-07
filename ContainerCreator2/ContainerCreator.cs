@@ -77,20 +77,30 @@ namespace ContainerCreator2
 
         [Function(nameof(DeleteContainers))]
         public async Task<IActionResult> DeleteContainers([HttpTrigger(AuthorizationLevel.Function, "get", "post")] HttpRequest req,
-            [DurableClient] DurableTaskClient client)
+            [DurableClient] DurableTaskClient client, [FromQuery] string containerGroupName = "")
         {
-            var hasCompleted = await containerManagerService.DeleteAllContainerGroups();
-
+            bool hasCompleted = false;
             var entityId = new EntityInstanceId(nameof(ContainersDurableEntity), "containers");
-            await client.Entities.SignalEntityAsync(entityId, nameof(ContainersDurableEntity.Reset));
 
+            if (string.IsNullOrEmpty(containerGroupName)) 
+            { 
+                hasCompleted = await containerManagerService.DeleteAllContainerGroups();
+                await client.Entities.SignalEntityAsync(entityId, nameof(ContainersDurableEntity.Reset));
+            }
+            else
+            {
+                hasCompleted = await containerManagerService.DeleteContainerGroup(containerGroupName);
+                EntityMetadata<ContainersDurableEntity>? entity = await client.Entities.GetEntityAsync<ContainersDurableEntity>(entityId);
+                var containerInfo = entity?.State?.Get()?.FirstOrDefault(c => c.ContainerGroupName == containerGroupName);
+                await client.Entities.SignalEntityAsync(entityId, nameof(ContainersDurableEntity.Delete), containerInfo);
+            }
             logger.LogInformation("C# HTTP trigger function processed a request.");
             return new OkObjectResult($"Deleted containers: {hasCompleted}");
         }
 
-        [Function(nameof(ShutAllContainersDaily))]
+        [Function(nameof(DeleteAllContainersDaily))]
         [FixedDelayRetry(5, "00:00:10")]
-        public async Task ShutAllContainersDaily([TimerTrigger("0 0 1 * * *")] TimerInfo timerInfo, FunctionContext context,
+        public async Task DeleteAllContainersDaily([TimerTrigger("0 0 1 * * *")] TimerInfo timerInfo, FunctionContext context,
             [DurableClient] DurableTaskClient client)
         {
             var hasCompleted = await containerManagerService.DeleteAllContainerGroups();
