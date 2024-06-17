@@ -23,6 +23,7 @@ namespace ContainerCreator2.Service
         private readonly string clientId;
         private readonly string clientSecret;
         private readonly string containerImage;
+        private readonly List<int> containerPorts;
         public ContainerManagerService(ILogger<ContainerManagerService> logger, IConfiguration configuration)
         {
             this.logger = logger;
@@ -32,24 +33,28 @@ namespace ContainerCreator2.Service
             this.clientId = this.configuration["ClientId"] ?? "";
             this.clientSecret = this.configuration["ClientSecret"] ?? "";
             this.containerImage = this.configuration["ContainerImage"] ?? "";
+            var ports = this.configuration["ContainerPorts"]?.Split(",") ?? new string[0];
+            this.containerPorts = ports.Select(p => int.TryParse(p, out var parsed) ? parsed : 80).ToList();
         }
 
         public async Task<ContainerInfo> CreateContainer(ContainerRequest containerRequest)
         {
-            var containerGroupName = $"containergroup-{RandomPasswordGenerator.CreateRandomPassword(7, useSpecialChars: false)}";
+            var containerGroupName = $"containergroup-{RandomPasswordGenerator.CreateRandomPassword(8, useSpecialChars: false)}";
             var randomPassword = RandomPasswordGenerator.CreateRandomPassword();
             var containerGroupCollection = await GetContainerGroupsFromResourceGroup();
             var containerResource = new ContainerResourceRequestsContent(1, 1);
             var requirements = new ContainerResourceRequirements(containerResource);
-            var ipAddress = new ContainerGroupIPAddress(new List<ContainerGroupPort>() { new ContainerGroupPort(8080) }, ContainerGroupIPAddressType.Public)
+            var containerGroupPorts = this.containerPorts.Select(p => new ContainerGroupPort(p)).ToList();
+            var ipAddress = new ContainerGroupIPAddress(containerGroupPorts, ContainerGroupIPAddressType.Public)
             {
                 DnsNameLabel = containerRequest.DnsNameLabel
             };
+
             var container = new ContainerInstanceContainer("container", this.containerImage, requirements)
             {
-                Ports = { new ContainerPort(8080) },
                 EnvironmentVariables = { new ContainerEnvironmentVariable("VNCPASS") { SecureValue = randomPassword } }
             };
+            this.containerPorts.Select(p => new ContainerPort(p)).ToList().ForEach(p => container.Ports.Add(p));
             if (!string.IsNullOrEmpty(containerRequest.UrlToOpenEncoded))
             {
                 container.EnvironmentVariables.Add(new ContainerEnvironmentVariable("URL_TO_OPEN") { 

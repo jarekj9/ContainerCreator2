@@ -2,13 +2,9 @@ using Azure.Identity;
 using Azure.Security.KeyVault.Secrets;
 using ContainerCreator2.Data;
 using ContainerCreator2.Service.Abstract;
-using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Azure.Functions.Worker;
-using Microsoft.Azure.Functions.Worker.Http;
-using Microsoft.DurableTask;
 using Microsoft.DurableTask.Client;
 using Microsoft.DurableTask.Client.Entities;
 using Microsoft.DurableTask.Entities;
@@ -38,8 +34,12 @@ namespace ContainerCreator2
             [DurableClient] DurableTaskClient client,
             [FromQuery] string dnsNameLabel, [FromQuery] string urlToOpenEncoded, [FromQuery] string ownerId = "00000000-0000-0000-0000-000000000000")
         {
-            var containerRequest = new ContainerRequest() { 
-                Id = Guid.NewGuid(), OwnerId = ownerId, DnsNameLabel = dnsNameLabel, UrlToOpenEncoded = urlToOpenEncoded 
+            var containerRequest = new ContainerRequest()
+            {
+                Id = Guid.NewGuid(),
+                OwnerId = ownerId,
+                DnsNameLabel = dnsNameLabel,
+                UrlToOpenEncoded = urlToOpenEncoded
             };
             var containerInfo = await containerManagerService.CreateContainer(containerRequest);
             var entityId = new EntityInstanceId(nameof(ContainersDurableEntity), "containers");
@@ -82,8 +82,8 @@ namespace ContainerCreator2
             bool hasCompleted = false;
             var entityId = new EntityInstanceId(nameof(ContainersDurableEntity), "containers");
 
-            if (string.IsNullOrEmpty(containerGroupName)) 
-            { 
+            if (string.IsNullOrEmpty(containerGroupName))
+            {
                 hasCompleted = await containerManagerService.DeleteAllContainerGroups();
                 await client.Entities.SignalEntityAsync(entityId, nameof(ContainersDurableEntity.Reset));
             }
@@ -109,76 +109,6 @@ namespace ContainerCreator2
             logger.LogWarning($"Automatically deleted containers if any existed: {hasCompleted}");
         }
 
-
-        // As orchestration:////////////////////////////////////////////////////////////////////////////////////////
-
-        [Function("Orchestrate")]
-        public async Task<bool> Orchestrate(
-            [OrchestrationTrigger] TaskOrchestrationContext context)
-        {
-            var containerRequest = context.GetInput<ContainerRequest>();
-            var containerInfo = await context.CallActivityAsync<ContainerInfo>(nameof(CreateContainerAsActivity), containerRequest);
-            context.SetCustomStatus($"Container Created {DateTime.UtcNow} UTC");
-
-            var waitDuration = TimeSpan.FromMinutes(20);
-            await context.CreateTimer(waitDuration, CancellationToken.None);
-
-            await context.CallActivityAsync<string>(nameof(DeleteContainerAsActivity), containerInfo);
-
-            return true;
-        }
-
-        [Function(nameof(CreateContainerAsActivity))]
-        public async Task<ContainerInfo> CreateContainerAsActivity([ActivityTrigger] ContainerRequest containerRequest,
-            [DurableClient] DurableTaskClient client)
-        {
-            var containerInfo = await containerManagerService.CreateContainer(containerRequest);
-            var entityId = new EntityInstanceId(nameof(ContainersDurableEntity), "containers");
-            await client.Entities.SignalEntityAsync(entityId, nameof(ContainersDurableEntity.Add), containerInfo);
-
-            logger.LogInformation("C# HTTP trigger function processed a request.");
-            return containerInfo;
-        }
-
-        [Function(nameof(DeleteContainerAsActivity))]
-        public async Task<string> DeleteContainerAsActivity([ActivityTrigger] ContainerInfo containerInfo,
-            [DurableClient] DurableTaskClient client)
-        {
-            var hasCompleted  = await containerManagerService.DeleteContainerGroup(containerInfo.ContainerGroupName);
-            var entityId = new EntityInstanceId(nameof(ContainersDurableEntity), "containers");
-            await client.Entities.SignalEntityAsync(entityId, nameof(ContainersDurableEntity.Delete), containerInfo);
-            logger.LogInformation($"Deleted container group {containerInfo.ContainerGroupName}");
-            return $"Deleted container group {containerInfo.ContainerGroupName}: {hasCompleted}";
-        }
-
-        [Function(nameof(GetOrchestrationStatus))]
-        public static async Task<IActionResult> GetOrchestrationStatus([DurableClient] DurableTaskClient client, [FromQuery] string instanceId,
-            [HttpTrigger(AuthorizationLevel.Function, "get", "post")] HttpRequest req)
-        {
-            var orchestrationData = await client.GetInstanceAsync(instanceId);
-            var status = orchestrationData.RuntimeStatus.ToString();
-            return new OkObjectResult(status);
-        }
-
-        [Function(nameof(CreateContainerInOrchestration))]
-        public async Task<RedirectResult> CreateContainerInOrchestration([HttpTrigger(AuthorizationLevel.Function, "get", "post")] HttpRequestData req,
-            [DurableClient] DurableTaskClient client,
-            [FromQuery] string dnsNameLabel, [FromQuery] string urlToOpenEncoded, [FromQuery] string ownerId = "00000000-0000-0000-0000-000000000000")
-        {
-            var containerInfo = new ContainerRequest()
-            {
-                Id = Guid.NewGuid(),
-                DnsNameLabel = dnsNameLabel,
-                UrlToOpenEncoded = urlToOpenEncoded,
-                OwnerId = ownerId
-            };
-            string instanceId = await client.ScheduleNewOrchestrationInstanceAsync("Orchestrate", containerInfo);
-            logger.LogInformation("Started orchestration with ID = '{instanceId}'.", instanceId);
-            return new RedirectResult($"/runtime/webhooks/durabletask/instances/{instanceId}");
-        }
-
-        ////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
         [Function("TestKeyVault")]
         public async Task<IActionResult> Test([HttpTrigger(AuthorizationLevel.Function, "get", "post")] HttpRequest req,
         [DurableClient] DurableTaskClient client)
@@ -192,29 +122,13 @@ namespace ContainerCreator2
                 var vaultClient = new SecretClient(new Uri(kvUri), new DefaultAzureCredential());
                 secret = (await vaultClient.GetSecretAsync(secretName)).Value.Value;
             }
-            catch(Exception ex)
+            catch (Exception ex)
             {
                 return new OkObjectResult($"{ex.Message}");
             }
 
             logger.LogInformation("C# HTTP trigger function processed a request.");
             return new OkObjectResult($"value: {secret}");
-        }
-    }
-    public class ContainersDurableEntity
-    {
-        public List<ContainerInfo> Containers { get; set; } = new List<ContainerInfo>();
-
-        public void Add(ContainerInfo containerInfo) => this.Containers.Add(containerInfo);
-        public void Delete(ContainerInfo containerInfo) => this.Containers.Remove(containerInfo);
-        public void Reset() => this.Containers.Clear();
-
-        public List<ContainerInfo> Get() => this.Containers;
-
-        [Function(nameof(ContainersDurableEntity))]
-        public static Task RunEntityAsync([EntityTrigger] TaskEntityDispatcher dispatcher)
-        {
-            return dispatcher.DispatchAsync<ContainersDurableEntity>();
         }
     }
 
