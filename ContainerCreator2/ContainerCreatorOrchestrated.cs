@@ -35,13 +35,13 @@ namespace ContainerCreator2
             var containerRequest = context.GetInput<ContainerRequest>();
             var containerInfo = await context.CallActivityAsync<ContainerInfo>(nameof(CreateContainerAsActivity), containerRequest);
             var containerHost = !string.IsNullOrEmpty(containerInfo.Fqdn) ? containerInfo.Fqdn : containerInfo.Ip;
-            context.SetCustomStatus($"Container Created {DateTime.UtcNow} UTC, http://{containerHost}:{containerInfo.Port}, {containerInfo.RandomPassword}");
+            context.SetCustomStatus($"Container Created {DateTime.UtcNow} UTC, {containerHost}:{containerInfo.Port}, {containerInfo.RandomPassword}");
 
             var waitDuration = TimeSpan.FromMinutes(this.containerLifeTimeMinutes);
             await context.CreateTimer(waitDuration, CancellationToken.None);
 
             var isDeleted = await context.CallActivityAsync<bool>(nameof(DeleteContainerAsActivity), containerInfo);
-            context.SetCustomStatus($"Container Deleted {DateTime.UtcNow} UTC, http://{containerInfo.Fqdn}:{containerInfo.Port}, {containerInfo.RandomPassword}");
+            context.SetCustomStatus($"Container Deleted {DateTime.UtcNow} UTC, {containerInfo.Fqdn}:{containerInfo.Port}, {containerInfo.RandomPassword}");
 
             return isDeleted;
         }
