@@ -151,8 +151,8 @@ namespace ContainerCreator2.Service
 
         private async Task<ResourceGroupResource> GetResourceGroup()
         {
-            var clientCredential = new ClientSecretCredential(this.tenantId, this.clientId, this.clientSecret);
-            ArmClient armClient = new ArmClient(clientCredential);
+            var clientSecretCredential = new ClientSecretCredential(this.tenantId, this.clientId, this.clientSecret);
+            ArmClient armClient = !string.IsNullOrEmpty(this.clientSecret) ? new ArmClient(clientSecretCredential) : new ArmClient(new ManagedIdentityCredential());
             var subscription = await armClient.GetSubscriptions().GetAsync(configuration["SubscriptionId"]).ConfigureAwait(false);
             var resourceGroupCollection = subscription.Value.GetResourceGroups();
             var resourceGroup = await resourceGroupCollection.GetAsync(this.resourceGroupName).ConfigureAwait(false);
