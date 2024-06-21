@@ -23,6 +23,8 @@ namespace ContainerCreator2.Service
         private readonly string clientId;
         private readonly string clientSecret;
         private readonly string containerImage;
+        private readonly int maxConcurrentContainersPerUser;
+        private readonly int maxConcurrentContainersTotal;
         private readonly List<int> containerPorts;
         public ContainerManagerService(ILogger<ContainerManagerService> logger, IConfiguration configuration)
         {
@@ -33,12 +35,19 @@ namespace ContainerCreator2.Service
             this.clientId = this.configuration["ClientId"] ?? "";
             this.clientSecret = this.configuration["ClientSecret"] ?? "";
             this.containerImage = this.configuration["ContainerImage"] ?? "";
+            this.maxConcurrentContainersPerUser = int.TryParse(this.configuration["MaxConcurrentContainersPerUser"], out var parsed) ? parsed : 1;
+            this.maxConcurrentContainersTotal = int.TryParse(this.configuration["MaxConcurrentContainersTotal"], out var parsedTotal) ? parsedTotal : 1;
             var ports = this.configuration["ContainerPorts"]?.Split(",") ?? new string[0];
             this.containerPorts = ports.Select(p => int.TryParse(p, out var parsed) ? parsed : 80).ToList();
         }
 
         public async Task<ContainerInfo> CreateContainer(ContainerRequest containerRequest)
         {
+            var (maxConcurrentContainersReached, problemMessage) = await MaxConcurrentContainersReached(containerRequest.OwnerId);
+            if (maxConcurrentContainersReached)
+            {
+                return new ContainerInfo() { IsDeploymentSuccesful = false, ProblemMessage = problemMessage };
+            }
             var containerGroupName = $"containergroup-{RandomPasswordGenerator.CreateRandomPassword(8, useSpecialChars: false)}";
             var randomPassword = RandomPasswordGenerator.CreateRandomPassword();
             var containerGroupCollection = await GetContainerGroupsFromResourceGroup();
@@ -64,7 +73,8 @@ namespace ContainerCreator2.Service
             var containers = new List<ContainerInstanceContainer> { container };
             var data = new ContainerGroupData(AzureLocation.NorthEurope, containers, ContainerInstanceOperatingSystemType.Linux)
             {
-                IPAddress = ipAddress
+                IPAddress = ipAddress,
+                Tags = { new KeyValuePair<string, string>("OwnerId", containerRequest.OwnerId) }
             };
             var containerResourceGroupResult = await containerGroupCollection.CreateOrUpdateAsync(WaitUntil.Completed, containerGroupName, data);
 
@@ -85,7 +95,8 @@ namespace ContainerCreator2.Service
                 Port = port,
                 OwnerId = Guid.TryParse(containerRequest.OwnerId, out var parsedId) ? parsedId : Guid.Empty,
                 CreatedTime = DateTime.UtcNow,
-                RandomPassword = randomPassword
+                RandomPassword = randomPassword,
+                IsDeploymentSuccesful = true
             };
 
             return containerInfo;
@@ -98,6 +109,9 @@ namespace ContainerCreator2.Service
             var containerInfos = new List<ContainerInfo>();
             foreach (var containerGroup in containerGroupCollection)
             {
+                var ownerIdfromTags = (containerGroup.Data?.Tags?.TryGetValue("OwnerId", out var ownerId) ?? false) ? 
+                    (Guid.TryParse(ownerId, out var parsed) ? parsed : Guid.Empty) : Guid.Empty;
+
                 containerInfos.Add(new ContainerInfo()
                 {
                     ContainerGroupName = containerGroup?.Data?.Name ?? "",
@@ -105,7 +119,8 @@ namespace ContainerCreator2.Service
                     Name = containerGroup.Data?.Containers?.FirstOrDefault()?.Name ?? "",
                     Fqdn = containerGroup.Data?.IPAddress?.Fqdn ?? "",
                     Ip = containerGroup.Data?.IPAddress?.IP?.ToString() ?? "",
-                    Port = containerGroup.Data?.IPAddress?.Ports?.FirstOrDefault()?.Port ?? 0
+                    Port = containerGroup.Data?.IPAddress?.Ports?.FirstOrDefault()?.Port ?? 0,
+                    OwnerId = ownerIdfromTags
                 });
             }
             return containerInfos;
@@ -147,6 +162,41 @@ namespace ContainerCreator2.Service
             var resourceGroup = await GetResourceGroup();
             var containerGroup = resourceGroup.GetContainerGroup(containerGroupName);
             return containerGroup;
+        }
+
+        private async Task<(bool, string)> MaxConcurrentContainersReached(string ownerId)
+        {
+            var activeContainers = await ShowContainers();
+
+            if(MaxConcurrentContainersPerUserReached(activeContainers, ownerId))
+            {
+                return (true, nameof(MaxConcurrentContainersPerUserReached));
+            }
+            if(MaxConcurrentContainersTotalReached(activeContainers))
+            {
+                return (true, nameof(MaxConcurrentContainersTotalReached));
+            }
+
+            return (false, "");
+        }
+
+        private bool MaxConcurrentContainersPerUserReached(List<ContainerInfo> activeContainers, string ownerId)
+        {
+            var usersActiveContainers = activeContainers.Where(c => c.OwnerId.ToString() == ownerId).Count();
+            if(usersActiveContainers >= this.maxConcurrentContainersPerUser)
+            {
+                return true;
+            }
+            return false;
+        }
+
+        private bool MaxConcurrentContainersTotalReached(List<ContainerInfo> activeContainers)
+        {
+            if (activeContainers.Count() >= this.maxConcurrentContainersTotal)
+            {
+                return true;
+            }
+            return false;
         }
 
         private async Task<ResourceGroupResource> GetResourceGroup()

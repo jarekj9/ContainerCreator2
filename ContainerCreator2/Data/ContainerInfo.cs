@@ -12,6 +12,8 @@
         public Guid OwnerId { get; set; }
         public DateTime CreatedTime { get; set; }
         public string RandomPassword { get; set; }
+        public bool IsDeploymentSuccesful { get; set; }
+        public string ProblemMessage { get; set; }
 
         public override bool Equals(object obj)
         {

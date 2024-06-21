@@ -34,15 +34,20 @@ namespace ContainerCreator2
         {
             var containerRequest = context.GetInput<ContainerRequest>();
             var containerInfo = await context.CallActivityAsync<ContainerInfo>(nameof(CreateContainerAsActivity), containerRequest);
+            if (!containerInfo.IsDeploymentSuccesful)
+            {
+                context.SetCustomStatus($"Failed to start, {containerInfo.ProblemMessage}, {DateTime.UtcNow} UTC");
+                return false;
+            }
+
             var containerHost = !string.IsNullOrEmpty(containerInfo.Fqdn) ? containerInfo.Fqdn : containerInfo.Ip;
-            context.SetCustomStatus($"Container Created {DateTime.UtcNow} UTC, {containerHost}:{containerInfo.Port}, {containerInfo.RandomPassword}");
+            context.SetCustomStatus(containerInfo);
 
             var waitDuration = TimeSpan.FromMinutes(this.containerLifeTimeMinutes);
             await context.CreateTimer(waitDuration, CancellationToken.None);
 
             var isDeleted = await context.CallActivityAsync<bool>(nameof(DeleteContainerAsActivity), containerInfo);
-            context.SetCustomStatus($"Container Deleted {DateTime.UtcNow} UTC, {containerInfo.Fqdn}:{containerInfo.Port}, {containerInfo.RandomPassword}");
-
+            context.SetCustomStatus($"Deleted:{DateTime.UtcNow} UTC,{containerHost},{containerInfo.Port}");
             return isDeleted;
         }
 
@@ -51,9 +56,11 @@ namespace ContainerCreator2
             [DurableClient] DurableTaskClient client)
         {
             var containerInfo = await containerManagerService.CreateContainer(containerRequest);
-            var entityId = new EntityInstanceId(nameof(ContainersDurableEntity), "containers");
-            await client.Entities.SignalEntityAsync(entityId, nameof(ContainersDurableEntity.Add), containerInfo);
-
+            if (containerInfo.IsDeploymentSuccesful)
+            {
+                var entityId = new EntityInstanceId(nameof(ContainersDurableEntity), "containers");
+                await client.Entities.SignalEntityAsync(entityId, nameof(ContainersDurableEntity.Add), containerInfo);
+            }
             logger.LogInformation("C# HTTP trigger function processed a request.");
             return containerInfo;
         }
@@ -79,7 +86,7 @@ namespace ContainerCreator2
         }
 
         [Function(nameof(CreateContainerInOrchestration))]
-        public async Task<RedirectResult> CreateContainerInOrchestration([HttpTrigger(AuthorizationLevel.Function, "get", "post")] HttpRequestData req,
+        public async Task<HttpResponseData> CreateContainerInOrchestration([HttpTrigger(AuthorizationLevel.Function, "get", "post")] HttpRequestData req,
             [DurableClient] DurableTaskClient client,
             [FromQuery] string dnsNameLabel, [FromQuery] string urlToOpenEncoded, [FromQuery] string ownerId = "00000000-0000-0000-0000-000000000000")
         {
@@ -92,7 +99,8 @@ namespace ContainerCreator2
             };
             string instanceId = await client.ScheduleNewOrchestrationInstanceAsync("Orchestrate", containerInfo);
             logger.LogInformation("Started orchestration with ID = '{instanceId}'.", instanceId);
-            return new RedirectResult($"/runtime/webhooks/durabletask/instances/{instanceId}");
+            //return new RedirectResult($"/runtime/webhooks/durabletask/instances/{instanceId}");
+            return await client.CreateCheckStatusResponseAsync(req, instanceId);
         }
     }
 
