@@ -48,35 +48,13 @@ namespace ContainerCreator2.Service
             {
                 return new ContainerInfo() { IsDeploymentSuccesful = false, ProblemMessage = problemMessage };
             }
-            var containerGroupName = $"containergroup-{RandomPasswordGenerator.CreateRandomPassword(8, useSpecialChars: false)}";
-            var randomPassword = RandomPasswordGenerator.CreateRandomPassword();
-            var containerGroupCollection = await GetContainerGroupsFromResourceGroup();
-            var containerResource = new ContainerResourceRequestsContent(1, 1);
-            var requirements = new ContainerResourceRequirements(containerResource);
-            var containerGroupPorts = this.containerPorts.Select(p => new ContainerGroupPort(p)).ToList();
-            var ipAddress = new ContainerGroupIPAddress(containerGroupPorts, ContainerGroupIPAddressType.Public)
-            {
-                DnsNameLabel = containerRequest.DnsNameLabel
-            };
 
-            var container = new ContainerInstanceContainer("container", this.containerImage, requirements)
-            {
-                EnvironmentVariables = { new ContainerEnvironmentVariable("VNCPASS") { SecureValue = randomPassword } }
-            };
-            this.containerPorts.Select(p => new ContainerPort(p)).ToList().ForEach(p => container.Ports.Add(p));
-            if (!string.IsNullOrEmpty(containerRequest.UrlToOpenEncoded))
-            {
-                container.EnvironmentVariables.Add(new ContainerEnvironmentVariable("URL_TO_OPEN") { 
-                    Value = HttpUtility.UrlDecode(containerRequest.UrlToOpenEncoded) 
-                });
-            }
-            var containers = new List<ContainerInstanceContainer> { container };
-            var data = new ContainerGroupData(AzureLocation.NorthEurope, containers, ContainerInstanceOperatingSystemType.Linux)
-            {
-                IPAddress = ipAddress,
-                Tags = { new KeyValuePair<string, string>("OwnerId", containerRequest.OwnerId) }
-            };
-            var containerResourceGroupResult = await containerGroupCollection.CreateOrUpdateAsync(WaitUntil.Completed, containerGroupName, data);
+            containerRequest.RandomPassword = RandomPasswordGenerator.CreateRandomPassword();
+            var containerGroupData = GetContainerGroupData(containerRequest);
+            var containerGroupName = $"containergroup-{RandomPasswordGenerator.CreateRandomPassword(8, useSpecialChars: false)}";
+
+            var containerGroupCollection = await GetContainerGroupsFromResourceGroup();
+            var containerResourceGroupResult = await containerGroupCollection.CreateOrUpdateAsync(WaitUntil.Completed, containerGroupName, containerGroupData);
 
             var fqdn = containerResourceGroupResult?.Value?.Data?.IPAddress?.Fqdn ?? "";
             var ip = containerResourceGroupResult?.Value?.Data?.IPAddress?.IP.ToString() ?? "";
@@ -95,11 +73,42 @@ namespace ContainerCreator2.Service
                 Port = port,
                 OwnerId = Guid.TryParse(containerRequest.OwnerId, out var parsedId) ? parsedId : Guid.Empty,
                 CreatedTime = DateTime.UtcNow,
-                RandomPassword = randomPassword,
+                RandomPassword = containerRequest.RandomPassword,
                 IsDeploymentSuccesful = true
             };
 
             return containerInfo;
+        }
+
+        private ContainerGroupData GetContainerGroupData(ContainerRequest containerRequest)
+        {
+            var containerResource = new ContainerResourceRequestsContent(1, 1);
+            var requirements = new ContainerResourceRequirements(containerResource);
+            var containerGroupPorts = this.containerPorts.Select(p => new ContainerGroupPort(p)).ToList();
+            var ipAddress = new ContainerGroupIPAddress(containerGroupPorts, ContainerGroupIPAddressType.Public)
+            {
+                DnsNameLabel = containerRequest.DnsNameLabel
+            };
+
+            var container = new ContainerInstanceContainer("container", this.containerImage, requirements)
+            {
+                EnvironmentVariables = { new ContainerEnvironmentVariable("VNCPASS") { SecureValue = containerRequest.RandomPassword } }
+            };
+            this.containerPorts.Select(p => new ContainerPort(p)).ToList().ForEach(p => container.Ports.Add(p));
+            if (!string.IsNullOrEmpty(containerRequest.UrlToOpenEncoded))
+            {
+                container.EnvironmentVariables.Add(new ContainerEnvironmentVariable("URL_TO_OPEN")
+                {
+                    Value = HttpUtility.UrlDecode(containerRequest.UrlToOpenEncoded)
+                });
+            }
+            var containers = new List<ContainerInstanceContainer> { container };
+            var data = new ContainerGroupData(AzureLocation.NorthEurope, containers, ContainerInstanceOperatingSystemType.Linux)
+            {
+                IPAddress = ipAddress,
+                Tags = { new KeyValuePair<string, string>("OwnerId", containerRequest.OwnerId) }
+            };
+            return data;
         }
 
         public async Task<List<ContainerInfo>> ShowContainers()
