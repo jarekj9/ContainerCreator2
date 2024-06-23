@@ -1,5 +1,11 @@
 # ACI container creator 
-Azure function, that creates Ubuntu docker container with firefox and noVNC access
+Azure function, that creates isolated Ubuntu docker container with firefox and noVNC access in predefined resource group.
+
+
+There are 2 versions:
+- ContainerCreator.cs uses simple azure functions
+- ContainerCreatorOrchestrated.cs - uses azure durable functions (orchestration, activity + entity to keep state)
+
 
 ## Example url
 
@@ -7,9 +13,8 @@ Azure function, that creates Ubuntu docker container with firefox and noVNC acce
 http://localhost:7169/api/CreateContainer?dnsNameLabel=testingjj-08&urlToOpenEncoded=https%3A%2F%2Fgithub.com%2F
 ```
 
-## Help in repo:
+## Example url (with orchestration)
 
 ```
-https://github.com/Azure/azure-sdk-for-net/blob/Azure.ResourceManager.ContainerInstance_1.1.0-beta.3/sdk/containerinstance/Azure.ResourceManager.ContainerInstance/samples/Generated/Samples/Sample_ContainerGroupCollection.cs
-
+http://localhost:7110/api/CreateContainerInOrchestration?dnsNameLabel=testingjj-02&urlToOpenEncoded=https%3A%2F%2Fgithub.com%2F
 ```
