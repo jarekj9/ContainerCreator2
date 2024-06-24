@@ -43,10 +43,16 @@ namespace ContainerCreator2.Service
 
         public async Task<ContainerInfo> CreateContainer(ContainerRequest containerRequest)
         {
-            var (maxConcurrentContainersReached, problemMessage) = await MaxConcurrentContainersReached(containerRequest.OwnerId);
-            if (maxConcurrentContainersReached)
+            var activeContainers = await ShowContainers();
+            if(MaxConcurrentContainersPerUserReached(activeContainers, containerRequest.OwnerId))
             {
-                return new ContainerInfo() { IsDeploymentSuccesful = false, ProblemMessage = problemMessage };
+                var oldestUsersContainer = GetOldestContainerForUser(activeContainers, containerRequest.OwnerId);
+                await DeleteContainerGroup(oldestUsersContainer.ContainerGroupName);
+                activeContainers = await ShowContainers();
+            }
+            if (MaxConcurrentContainersTotalReached(activeContainers))
+            {
+                return new ContainerInfo() { IsDeploymentSuccesful = false, ProblemMessage = nameof(MaxConcurrentContainersTotalReached) };
             }
 
             containerRequest.RandomPassword = RandomPasswordGenerator.CreateRandomPassword();
@@ -87,7 +93,7 @@ namespace ContainerCreator2.Service
             var containerGroupPorts = this.containerPorts.Select(p => new ContainerGroupPort(p)).ToList();
             var ipAddress = new ContainerGroupIPAddress(containerGroupPorts, ContainerGroupIPAddressType.Public)
             {
-                DnsNameLabel = containerRequest.DnsNameLabel
+                DnsNameLabel = containerRequest.DnsNameLabel,
             };
 
             var container = new ContainerInstanceContainer("container", this.containerImage, requirements)
@@ -173,20 +179,14 @@ namespace ContainerCreator2.Service
             return containerGroup;
         }
 
-        private async Task<(bool, string)> MaxConcurrentContainersReached(string ownerId)
+        private ContainerInfo GetOldestContainerForUser(List<ContainerInfo> activeContainers, string ownerId)
         {
-            var activeContainers = await ShowContainers();
-
-            if(MaxConcurrentContainersPerUserReached(activeContainers, ownerId))
+            var oldestContainer = activeContainers.Where(c => c.OwnerId.ToString() == ownerId).OrderBy(c => c.CreatedTime).FirstOrDefault();
+            if(oldestContainer != null)
             {
-                return (true, nameof(MaxConcurrentContainersPerUserReached));
+                return oldestContainer;
             }
-            if(MaxConcurrentContainersTotalReached(activeContainers))
-            {
-                return (true, nameof(MaxConcurrentContainersTotalReached));
-            }
-
-            return (false, "");
+            return new ContainerInfo();
         }
 
         private bool MaxConcurrentContainersPerUserReached(List<ContainerInfo> activeContainers, string ownerId)
