@@ -5,7 +5,7 @@ namespace ContainerCreator2.Service.Abstract
     public interface IContainerManagerService
     {
         Task<ContainerInfo> CreateContainer(ContainerRequest containerRequest);
-        Task<List<ContainerInfo>> ShowContainers();
+        Task<List<ContainerInfo>> GetContainers();
         Task<bool> DeleteAllContainerGroups();
         Task<bool> DeleteContainerGroup(string containerGroupName);
     }

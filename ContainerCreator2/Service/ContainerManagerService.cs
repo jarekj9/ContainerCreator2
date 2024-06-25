@@ -43,12 +43,12 @@ namespace ContainerCreator2.Service
 
         public async Task<ContainerInfo> CreateContainer(ContainerRequest containerRequest)
         {
-            var activeContainers = await ShowContainers();
+            var activeContainers = await GetContainers();
             if(MaxConcurrentContainersPerUserReached(activeContainers, containerRequest.OwnerId))
             {
                 var oldestUsersContainer = GetOldestContainerForUser(activeContainers, containerRequest.OwnerId);
                 await DeleteContainerGroup(oldestUsersContainer.ContainerGroupName);
-                activeContainers = await ShowContainers();
+                activeContainers = await GetContainers();
             }
             if (MaxConcurrentContainersTotalReached(activeContainers))
             {
@@ -117,7 +117,7 @@ namespace ContainerCreator2.Service
             return data;
         }
 
-        public async Task<List<ContainerInfo>> ShowContainers()
+        public async Task<List<ContainerInfo>> GetContainers()
         {
             var containerGroupCollection = await GetContainerGroupsFromResourceGroup();
 
@@ -177,6 +177,16 @@ namespace ContainerCreator2.Service
             var resourceGroup = await GetResourceGroup();
             var containerGroup = resourceGroup.GetContainerGroup(containerGroupName);
             return containerGroup;
+        }
+
+        public async Task DeleteContainersOverTimeLimit(int maxMinutes)
+        {
+            var activeContainers = await GetContainers();
+            var containersOverTimeLimit = activeContainers.Where(c => c.CreatedTime.AddMinutes(maxMinutes + 3) > DateTime.UtcNow).ToList();
+            foreach(var conainer in containersOverTimeLimit)
+            {
+                await DeleteContainerGroup(conainer.ContainerGroupName);
+            }
         }
 
         private ContainerInfo GetOldestContainerForUser(List<ContainerInfo> activeContainers, string ownerId)

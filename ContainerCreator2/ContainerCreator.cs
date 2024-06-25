@@ -59,7 +59,7 @@ namespace ContainerCreator2
             string containersReadFromAzure, containersReadFromDurableEntity;
             try
             {
-                var containerInfos = await containerManagerService.ShowContainers();
+                var containerInfos = await containerManagerService.GetContainers();
                 containersReadFromAzure = JsonSerializer.Serialize(containerInfos);
 
                 var entityId = new EntityInstanceId(nameof(ContainersDurableEntity), "containers");
