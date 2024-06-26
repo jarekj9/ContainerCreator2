@@ -112,7 +112,10 @@ namespace ContainerCreator2.Service
             var data = new ContainerGroupData(AzureLocation.NorthEurope, containers, ContainerInstanceOperatingSystemType.Linux)
             {
                 IPAddress = ipAddress,
-                Tags = { new KeyValuePair<string, string>("OwnerId", containerRequest.OwnerId) }
+                Tags = { 
+                    new KeyValuePair<string, string>("OwnerId", containerRequest.OwnerId), 
+                    new KeyValuePair<string, string>("CreatedTime", DateTime.UtcNow.ToString()) 
+                }
             };
             return data;
         }
@@ -127,6 +130,9 @@ namespace ContainerCreator2.Service
                 var ownerIdfromTags = (containerGroup.Data?.Tags?.TryGetValue("OwnerId", out var ownerId) ?? false) ? 
                     (Guid.TryParse(ownerId, out var parsed) ? parsed : Guid.Empty) : Guid.Empty;
 
+                var createdTimefromTags = (containerGroup.Data?.Tags?.TryGetValue("CreatedTime", out var createdTime) ?? false) ?
+                    (DateTime.TryParse(createdTime, out var parsedTime) ? parsedTime : DateTime.MinValue) : DateTime.MinValue;
+
                 containerInfos.Add(new ContainerInfo()
                 {
                     ContainerGroupName = containerGroup?.Data?.Name ?? "",
@@ -135,7 +141,8 @@ namespace ContainerCreator2.Service
                     Fqdn = containerGroup.Data?.IPAddress?.Fqdn ?? "",
                     Ip = containerGroup.Data?.IPAddress?.IP?.ToString() ?? "",
                     Port = containerGroup.Data?.IPAddress?.Ports?.FirstOrDefault()?.Port ?? 0,
-                    OwnerId = ownerIdfromTags
+                    OwnerId = ownerIdfromTags,
+                    CreatedTime = createdTimefromTags
                 });
             }
             return containerInfos;
@@ -179,14 +186,16 @@ namespace ContainerCreator2.Service
             return containerGroup;
         }
 
-        public async Task DeleteContainersOverTimeLimit(int maxMinutes)
+        public async Task<bool> DeleteContainersOverTimeLimit(int maxMinutes)
         {
+            bool isSuccessful = true;
             var activeContainers = await GetContainers();
-            var containersOverTimeLimit = activeContainers.Where(c => c.CreatedTime.AddMinutes(maxMinutes + 3) > DateTime.UtcNow).ToList();
+            var containersOverTimeLimit = activeContainers.Where(c => c.CreatedTime.AddMinutes(maxMinutes + 3) < DateTime.UtcNow).ToList();
             foreach(var conainer in containersOverTimeLimit)
             {
-                await DeleteContainerGroup(conainer.ContainerGroupName);
+                isSuccessful = isSuccessful && await DeleteContainerGroup(conainer.ContainerGroupName);
             }
+            return isSuccessful;
         }
 
         private ContainerInfo GetOldestContainerForUser(List<ContainerInfo> activeContainers, string ownerId)

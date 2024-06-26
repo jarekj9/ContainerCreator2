@@ -102,6 +102,25 @@ namespace ContainerCreator2
             //return new RedirectResult($"/runtime/webhooks/durabletask/instances/{instanceId}");
             return await client.CreateCheckStatusResponseAsync(req, instanceId);
         }
+
+        [Function(nameof(DeleteAllContainersDaily))]
+        [FixedDelayRetry(5, "00:00:10")]
+        public async Task DeleteAllContainersDaily([TimerTrigger("0 0 1 * * *")] TimerInfo timerInfo, FunctionContext context,
+            [DurableClient] DurableTaskClient client)
+        {
+            var hasCompleted = await containerManagerService.DeleteAllContainerGroups();
+            var entityId = new EntityInstanceId(nameof(ContainersDurableEntity), "containers");
+            await client.Entities.SignalEntityAsync(entityId, nameof(ContainersDurableEntity.Reset));
+            logger.LogInformation($"Automatically deleted containers if any existed: {hasCompleted}");
+        }
+
+        [Function(nameof(DeleteOldContainersAsFailSafe))]
+        public async Task DeleteOldContainersAsFailSafe([TimerTrigger("0 10 * * * *")] TimerInfo timerInfo, FunctionContext context,
+            [DurableClient] DurableTaskClient client)
+        {
+            var hasCompleted = await containerManagerService.DeleteContainersOverTimeLimit(this.containerLifeTimeMinutes);
+            logger.LogDebug($"Automatically deleted containers over time limit if any existed: {hasCompleted}");
+        }
     }
 
     public class ContainersDurableEntity

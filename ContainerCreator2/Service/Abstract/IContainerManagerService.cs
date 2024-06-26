@@ -8,5 +8,6 @@ namespace ContainerCreator2.Service.Abstract
         Task<List<ContainerInfo>> GetContainers();
         Task<bool> DeleteAllContainerGroups();
         Task<bool> DeleteContainerGroup(string containerGroupName);
+        Task<bool> DeleteContainersOverTimeLimit(int maxMinutes);
     }
 }
