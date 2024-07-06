@@ -109,7 +109,7 @@ namespace ContainerCreator2.Service
                 });
             }
             var containers = new List<ContainerInstanceContainer> { container };
-            var data = new ContainerGroupData(AzureLocation.NorthEurope, containers, ContainerInstanceOperatingSystemType.Linux)
+            var containerGroupData = new ContainerGroupData(AzureLocation.NorthEurope, containers, ContainerInstanceOperatingSystemType.Linux)
             {
                 IPAddress = ipAddress,
                 Tags = { 
@@ -117,7 +117,32 @@ namespace ContainerCreator2.Service
                     new KeyValuePair<string, string>("CreatedTime", DateTime.UtcNow.ToString()) 
                 }
             };
-            return data;
+            //TODO: test if it works for credentials setting:
+            var registryCredentials = CreateRegistryCredentials();
+            if(string.IsNullOrEmpty(registryCredentials.Server))
+            {
+                containerGroupData.ImageRegistryCredentials.Add(registryCredentials);
+            }
+
+            return containerGroupData;
+        }
+
+        private ContainerGroupImageRegistryCredential CreateRegistryCredentials()
+        {
+            if (new List<string?> () { 
+                configuration["RegistryCredentialsServer"], 
+                configuration["RegistryCredentialsUserName"], 
+                configuration["RegistryCredentialsPassword"] 
+            }
+            .Any(s => string.IsNullOrEmpty(s)))
+            {
+                new ContainerGroupImageRegistryCredential("");
+            }
+
+            var registryCredentials = new ContainerGroupImageRegistryCredential(configuration["RegistryCredentialsServer"]);
+            registryCredentials.Username = configuration["RegistryCredentialsUserName"];
+            registryCredentials.Password = configuration["RegistryCredentialsPassword"];
+            return registryCredentials;
         }
 
         public async Task<List<ContainerInfo>> GetContainers()
