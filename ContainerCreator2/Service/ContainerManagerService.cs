@@ -119,7 +119,7 @@ namespace ContainerCreator2.Service
             };
             //TODO: test if it works for credentials setting:
             var registryCredentials = CreateRegistryCredentials();
-            if(string.IsNullOrEmpty(registryCredentials.Server))
+            if(!string.IsNullOrEmpty(registryCredentials.Server))
             {
                 containerGroupData.ImageRegistryCredentials.Add(registryCredentials);
             }
