@@ -26,6 +26,7 @@ namespace ContainerCreator2.Service
         private readonly int maxConcurrentContainersPerUser;
         private readonly int maxConcurrentContainersTotal;
         private readonly List<int> containerPorts;
+        private readonly int containerLifeTimeMinutes;
         public ContainerManagerService(ILogger<ContainerManagerService> logger, IConfiguration configuration)
         {
             this.logger = logger;
@@ -39,6 +40,7 @@ namespace ContainerCreator2.Service
             this.maxConcurrentContainersTotal = int.TryParse(this.configuration["MaxConcurrentContainersTotal"], out var parsedTotal) ? parsedTotal : 1;
             var ports = this.configuration["ContainerPorts"]?.Split(",") ?? new string[0];
             this.containerPorts = ports.Select(p => int.TryParse(p, out var parsed) ? parsed : 80).ToList();
+            this.containerLifeTimeMinutes = int.TryParse(this.configuration["ContainerLifeTimeMinutes"], out var parsedMinutes) ? parsedMinutes : 20;
         }
 
         public async Task<ContainerInfo> CreateContainer(ContainerRequest containerRequest)
@@ -98,7 +100,10 @@ namespace ContainerCreator2.Service
 
             var container = new ContainerInstanceContainer("container", this.containerImage, requirements)
             {
-                EnvironmentVariables = { new ContainerEnvironmentVariable("VNCPASS") { SecureValue = containerRequest.RandomPassword } }
+                EnvironmentVariables = {
+                    new ContainerEnvironmentVariable("VNCPASS") { SecureValue = containerRequest.RandomPassword },
+                    new ContainerEnvironmentVariable("MAXMINUTES") { Value = this.containerLifeTimeMinutes.ToString() }
+                }
             };
             this.containerPorts.Select(p => new ContainerPort(p)).ToList().ForEach(p => container.Ports.Add(p));
             if (!string.IsNullOrEmpty(containerRequest.UrlToOpenEncoded))
@@ -112,12 +117,11 @@ namespace ContainerCreator2.Service
             var containerGroupData = new ContainerGroupData(AzureLocation.NorthEurope, containers, ContainerInstanceOperatingSystemType.Linux)
             {
                 IPAddress = ipAddress,
-                Tags = { 
-                    new KeyValuePair<string, string>("OwnerId", containerRequest.OwnerId), 
-                    new KeyValuePair<string, string>("CreatedTime", DateTime.UtcNow.ToString()) 
+                Tags = {
+                    new KeyValuePair<string, string>("OwnerId", containerRequest.OwnerId),
+                    new KeyValuePair<string, string>("CreatedTime", DateTime.UtcNow.ToString())
                 }
             };
-            //TODO: test if it works for credentials setting:
             var registryCredentials = CreateRegistryCredentials();
             if(!string.IsNullOrEmpty(registryCredentials.Server))
             {
@@ -129,10 +133,10 @@ namespace ContainerCreator2.Service
 
         private ContainerGroupImageRegistryCredential CreateRegistryCredentials()
         {
-            if (new List<string?> () { 
-                configuration["RegistryCredentialsServer"], 
-                configuration["RegistryCredentialsUserName"], 
-                configuration["RegistryCredentialsPassword"] 
+            if(new List<string?>() {
+                configuration["RegistryCredentialsServer"],
+                configuration["RegistryCredentialsUserName"],
+                configuration["RegistryCredentialsPassword"]
             }
             .Any(s => string.IsNullOrEmpty(s)))
             {
@@ -152,7 +156,7 @@ namespace ContainerCreator2.Service
             var containerInfos = new List<ContainerInfo>();
             foreach (var containerGroup in containerGroupCollection)
             {
-                var ownerIdfromTags = (containerGroup.Data?.Tags?.TryGetValue("OwnerId", out var ownerId) ?? false) ? 
+                var ownerIdfromTags = (containerGroup.Data?.Tags?.TryGetValue("OwnerId", out var ownerId) ?? false) ?
                     (Guid.TryParse(ownerId, out var parsed) ? parsed : Guid.Empty) : Guid.Empty;
 
                 var createdTimefromTags = (containerGroup.Data?.Tags?.TryGetValue("CreatedTime", out var createdTime) ?? false) ?
