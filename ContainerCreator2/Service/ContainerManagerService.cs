@@ -45,18 +45,6 @@ namespace ContainerCreator2.Service
 
         public async Task<ContainerInfo> CreateContainer(ContainerRequest containerRequest)
         {
-            var activeContainers = await GetContainers();
-            if(MaxConcurrentContainersPerUserReached(activeContainers, containerRequest.OwnerId))
-            {
-                var oldestUsersContainer = GetOldestContainerForUser(activeContainers, containerRequest.OwnerId);
-                await DeleteContainerGroup(oldestUsersContainer.ContainerGroupName);
-                activeContainers = await GetContainers();
-            }
-            if (MaxConcurrentContainersTotalReached(activeContainers))
-            {
-                return new ContainerInfo() { IsDeploymentSuccesful = false, ProblemMessage = nameof(MaxConcurrentContainersTotalReached) };
-            }
-
             containerRequest.RandomPassword = RandomPasswordGenerator.CreateRandomPassword();
             var containerGroupData = GetContainerGroupData(containerRequest);
             var containerGroupName = $"containergroup-{RandomPasswordGenerator.CreateRandomPassword(8, useSpecialChars: false)}";
@@ -196,9 +184,17 @@ namespace ContainerCreator2.Service
 
         public async Task<bool> DeleteContainerGroup(string containerGroupName)
         {
-            var containerGroup = await GetContainerByName(containerGroupName);
-            var result = await containerGroup.DeleteAsync(WaitUntil.Completed);
-            return result.HasCompleted;
+            try
+            {
+                var containerGroup = await GetContainerByName(containerGroupName);
+                var result = await containerGroup.DeleteAsync(WaitUntil.Completed);
+                return result.HasCompleted;
+            }
+            catch (Exception e)
+            {
+                logger.LogWarning(e, $"Cannot delete containerGroupName");
+                return false;
+            }
         }
 
         private async Task<ContainerGroupCollection> GetContainerGroupsFromResourceGroup()
@@ -215,19 +211,14 @@ namespace ContainerCreator2.Service
             return containerGroup;
         }
 
-        public async Task<bool> DeleteContainersOverTimeLimit(int maxMinutes)
+        public async Task<List<ContainerInfo>> GetContainersOverTimeLimit(int maxMinutes)
         {
-            bool isSuccessful = true;
             var activeContainers = await GetContainers();
             var containersOverTimeLimit = activeContainers.Where(c => c.CreatedTime.AddMinutes(maxMinutes + 3) < DateTime.UtcNow).ToList();
-            foreach(var conainer in containersOverTimeLimit)
-            {
-                isSuccessful = isSuccessful && await DeleteContainerGroup(conainer.ContainerGroupName);
-            }
-            return isSuccessful;
+            return containersOverTimeLimit;
         }
 
-        private ContainerInfo GetOldestContainerForUser(List<ContainerInfo> activeContainers, string ownerId)
+        public ContainerInfo GetOldestContainerForUser(List<ContainerInfo> activeContainers, string ownerId)
         {
             var oldestContainer = activeContainers.Where(c => c.OwnerId.ToString() == ownerId).OrderBy(c => c.CreatedTime).FirstOrDefault();
             if(oldestContainer != null)
@@ -237,7 +228,7 @@ namespace ContainerCreator2.Service
             return new ContainerInfo();
         }
 
-        private bool MaxConcurrentContainersPerUserReached(List<ContainerInfo> activeContainers, string ownerId)
+        public bool MaxConcurrentContainersPerUserReached(List<ContainerInfo> activeContainers, string ownerId)
         {
             var usersActiveContainers = activeContainers.Where(c => c.OwnerId.ToString() == ownerId).Count();
             if(usersActiveContainers >= this.maxConcurrentContainersPerUser)
@@ -247,7 +238,7 @@ namespace ContainerCreator2.Service
             return false;
         }
 
-        private bool MaxConcurrentContainersTotalReached(List<ContainerInfo> activeContainers)
+        public bool MaxConcurrentContainersTotalReached(List<ContainerInfo> activeContainers)
         {
             if (activeContainers.Count() >= this.maxConcurrentContainersTotal)
             {

@@ -6,6 +6,7 @@ using Microsoft.Azure.Functions.Worker;
 using Microsoft.Azure.Functions.Worker.Http;
 using Microsoft.DurableTask;
 using Microsoft.DurableTask.Client;
+using Microsoft.DurableTask.Client.Entities;
 using Microsoft.DurableTask.Entities;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -33,6 +34,13 @@ namespace ContainerCreator2
             [OrchestrationTrigger] TaskOrchestrationContext context)
         {
             var containerRequest = context.GetInput<ContainerRequest>();
+            var overLimitsError = await context.CallActivityAsync<string>(nameof(GetOverLimitsErrorActivity), containerRequest);
+            if(!string.IsNullOrEmpty(overLimitsError))
+            {
+                context.SetCustomStatus($"Failed to start, {overLimitsError}, {DateTime.UtcNow} UTC");
+                return false;
+            }
+            
             var containerInfo = await context.CallActivityAsync<ContainerInfo>(nameof(CreateContainerAsActivity), containerRequest);
             if (!containerInfo.IsDeploymentSuccesful)
             {
@@ -51,16 +59,78 @@ namespace ContainerCreator2
             return isDeleted;
         }
 
+        [Function(nameof(GetOverLimitsErrorActivity))]
+        public async Task<string> GetOverLimitsErrorActivity([ActivityTrigger] ContainerRequest containerRequest,
+            [DurableClient] DurableTaskClient client
+            //,TaskOrchestrationContext context
+            )
+        {
+            var entityId = new EntityInstanceId(nameof(ContainersDurableEntity), "containers");
+            EntityMetadata<ContainersDurableEntity>? entity = await client.Entities.GetEntityAsync<ContainersDurableEntity>(entityId);
+            var activeContainers = await containerManagerService.GetContainers();
+
+            while (containerManagerService.MaxConcurrentContainersPerUserReached(activeContainers, containerRequest.OwnerId))
+            {
+                var oldestUsersContainer = containerManagerService.GetOldestContainerForUser(activeContainers, containerRequest.OwnerId);
+                await containerManagerService.DeleteContainerGroup(oldestUsersContainer.ContainerGroupName);
+
+                await client.Entities.SignalEntityAsync(entityId, nameof(ContainersDurableEntity.Delete), oldestUsersContainer);
+                //var deleteSuccess = await context.Entities.CallEntityAsync<ContainerInfo>(entityId, nameof(ContainersDurableEntity.Delete), oldestUsersContainer);
+                
+                activeContainers = await containerManagerService.GetContainers();
+            }
+            if (containerManagerService.MaxConcurrentContainersTotalReached(activeContainers))
+            {
+                logger.LogWarning($"Problem: {nameof(containerManagerService.MaxConcurrentContainersTotalReached)}");
+                return nameof(containerManagerService.MaxConcurrentContainersTotalReached);
+            }
+
+            var containersFromMemory = entity?.State?.Get()?.ToList() ?? new List<ContainerInfo>();
+            logger.LogInformation($"containersFromMemory: {containersFromMemory.Count}");
+
+            // TODO: this IF may always be opened if deleting old users container does not propagate in durable entity
+            if (containerManagerService.MaxConcurrentContainersPerUserReached(containersFromMemory, containerRequest.OwnerId))
+            {
+                Thread.Sleep(TimeSpan.FromSeconds(60)); 
+                activeContainers = await containerManagerService.GetContainers();
+                if (containerManagerService.MaxConcurrentContainersPerUserReached(activeContainers, containerRequest.OwnerId))
+                {
+                    logger.LogWarning($"Problem: {nameof(containerManagerService.MaxConcurrentContainersPerUserReached)}");
+                    return nameof(containerManagerService.MaxConcurrentContainersPerUserReached);
+                }
+
+                // Problem occured, need to sync entity memory with current state
+                foreach (var containerInfo in containersFromMemory.Where(c => c.OwnerId.ToString() == containerRequest.OwnerId))
+                {
+                    await client.Entities.SignalEntityAsync(entityId, nameof(ContainersDurableEntity.Delete), containerInfo);
+                }
+                foreach (var containerInfo in activeContainers.Where(c => c.OwnerId.ToString() == containerRequest.OwnerId))
+                {
+                    await client.Entities.SignalEntityAsync(entityId, nameof(ContainersDurableEntity.Add), containerInfo);
+                }
+            }
+
+            return string.Empty;
+        }
+
         [Function(nameof(CreateContainerAsActivity))]
         public async Task<ContainerInfo> CreateContainerAsActivity([ActivityTrigger] ContainerRequest containerRequest,
             [DurableClient] DurableTaskClient client)
         {
+            var entityId = new EntityInstanceId(nameof(ContainersDurableEntity), "containers");
+            var tempContainerInfo = new ContainerInfo()
+            {
+                OwnerId = Guid.TryParse(containerRequest.OwnerId, out var parsed) ? parsed : Guid.Empty,
+                ContainerGroupName = containerRequest.OwnerId
+            };
+
+            await client.Entities.SignalEntityAsync(entityId, nameof(ContainersDurableEntity.Add), tempContainerInfo);
             var containerInfo = await containerManagerService.CreateContainer(containerRequest);
             if (containerInfo.IsDeploymentSuccesful)
             {
-                var entityId = new EntityInstanceId(nameof(ContainersDurableEntity), "containers");
                 await client.Entities.SignalEntityAsync(entityId, nameof(ContainersDurableEntity.Add), containerInfo);
             }
+            await client.Entities.SignalEntityAsync(entityId, nameof(ContainersDurableEntity.Delete), tempContainerInfo);
             logger.LogInformation("C# HTTP trigger function processed a request.");
             return containerInfo;
         }
@@ -118,8 +188,14 @@ namespace ContainerCreator2
         public async Task DeleteOldContainersAsFailSafe([TimerTrigger("0 10 * * * *")] TimerInfo timerInfo, FunctionContext context,
             [DurableClient] DurableTaskClient client)
         {
-            var hasCompleted = await containerManagerService.DeleteContainersOverTimeLimit(this.containerLifeTimeMinutes);
-            logger.LogDebug($"Automatically deleted containers over time limit if any existed: {hasCompleted}");
+            var entityId = new EntityInstanceId(nameof(ContainersDurableEntity), "containers");
+            var containerInfosToDelete = await containerManagerService.GetContainersOverTimeLimit(containerLifeTimeMinutes);
+            foreach (var containerInfo in containerInfosToDelete)
+            {
+                await containerManagerService.DeleteContainerGroup(containerInfo.ContainerGroupName);
+                await client.Entities.SignalEntityAsync(entityId, nameof(ContainersDurableEntity.Delete), containerInfo);
+            }
+            logger.LogDebug($"Automatically deleted containers over time limit if any existed");
         }
     }
 
@@ -131,7 +207,7 @@ namespace ContainerCreator2
         public void Delete(ContainerInfo containerInfo) => this.Containers.Remove(containerInfo);
         public void Reset() => this.Containers.Clear();
 
-        public List<ContainerInfo> Get() => this.Containers;
+        public List<ContainerInfo> Get() => this.Containers ?? new List<ContainerInfo>();
 
         [Function(nameof(ContainersDurableEntity))]
         public static Task RunEntityAsync([EntityTrigger] TaskEntityDispatcher dispatcher)

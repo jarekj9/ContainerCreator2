@@ -56,15 +56,18 @@ namespace ContainerCreator2
         public async Task<IActionResult> ShowContainers([HttpTrigger(AuthorizationLevel.Function, "get", "post")] HttpRequest req,
             [DurableClient] DurableTaskClient client)
         {
-            string containersReadFromAzure, containersReadFromDurableEntity;
+            string containersReal, containersInMemory;
+            List<ContainerInfo> containerInfosReal;
+            List<ContainerInfo> containerInfosInMemory;
             try
             {
-                var containerInfos = await containerManagerService.GetContainers();
-                containersReadFromAzure = JsonSerializer.Serialize(containerInfos);
+                containerInfosReal = await containerManagerService.GetContainers();
+                containersReal = JsonSerializer.Serialize(containerInfosReal);
 
                 var entityId = new EntityInstanceId(nameof(ContainersDurableEntity), "containers");
                 EntityMetadata<ContainersDurableEntity>? entity = await client.Entities.GetEntityAsync<ContainersDurableEntity>(entityId);
-                containersReadFromDurableEntity = JsonSerializer.Serialize(entity?.State?.Get());
+                containerInfosInMemory = entity?.State?.Get() ?? new List<ContainerInfo>();
+                containersInMemory = JsonSerializer.Serialize(containerInfosInMemory);
             }
             catch (Exception ex)
             {
@@ -72,7 +75,9 @@ namespace ContainerCreator2
             }
 
             logger.LogInformation($"C# HTTP trigger function processed a request. ");
-            return new OkObjectResult($"{containersReadFromAzure}\n\n{containersReadFromDurableEntity}");
+            var response = new StringBuilder($"Real: {containerInfosReal.Count()}: {containersReal}\n\n");
+            response.Append($"In memory: {containerInfosInMemory.Count()}: {containersInMemory}");
+            return new OkObjectResult(response.ToString());
         }
 
         [Function(nameof(DeleteContainers))]
