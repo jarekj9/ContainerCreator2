@@ -228,10 +228,20 @@ namespace ContainerCreator2.Service
             return new ContainerInfo();
         }
 
-        public bool MaxConcurrentContainersPerUserReached(List<ContainerInfo> activeContainers, string ownerId)
+        public bool UsersContainersLimitReachedOrExceeded(List<ContainerInfo> activeContainers, string ownerId)
         {
             var usersActiveContainers = activeContainers.Where(c => c.OwnerId.ToString() == ownerId).Count();
             if(usersActiveContainers >= this.maxConcurrentContainersPerUser)
+            {
+                return true;
+            }
+            return false;
+        }
+
+        public bool UsersContainersCountEqualsLimit(List<ContainerInfo> activeContainers, string ownerId)
+        {
+            var usersActiveContainers = activeContainers.Where(c => c.OwnerId.ToString() == ownerId).Count();
+            if (usersActiveContainers == this.maxConcurrentContainersPerUser)
             {
                 return true;
             }

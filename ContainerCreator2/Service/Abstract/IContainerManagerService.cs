@@ -9,8 +9,9 @@ namespace ContainerCreator2.Service.Abstract
         Task<bool> DeleteAllContainerGroups();
         Task<bool> DeleteContainerGroup(string containerGroupName);
         Task<List<ContainerInfo>> GetContainersOverTimeLimit(int maxMinutes);
-        bool MaxConcurrentContainersPerUserReached(List<ContainerInfo> activeContainers, string ownerId);
+        bool UsersContainersLimitReachedOrExceeded(List<ContainerInfo> activeContainers, string ownerId);
         bool MaxConcurrentContainersTotalReached(List<ContainerInfo> activeContainers);
+        bool UsersContainersCountEqualsLimit(List<ContainerInfo> activeContainers, string ownerId);
         ContainerInfo GetOldestContainerForUser(List<ContainerInfo> activeContainers, string ownerId);
     }
 }
