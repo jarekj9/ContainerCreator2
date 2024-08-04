@@ -174,14 +174,22 @@ namespace ContainerCreator2
         }
 
         [Function(nameof(DeleteOldContainersAsFailSafe))]
-        public async Task DeleteOldContainersAsFailSafe([TimerTrigger("0 10 * * * *")] TimerInfo timerInfo, FunctionContext context,
+        public async Task DeleteOldContainersAsFailSafe([TimerTrigger("0 */30 * * * *")] TimerInfo timerInfo, FunctionContext context,
             [DurableClient] DurableTaskClient client)
         {
             var containerInfosToDelete = await containerManagerService.GetContainersOverTimeLimit(containerLifeTimeMinutes);
             foreach (var containerInfo in containerInfosToDelete)
             {
-                await containerManagerService.DeleteContainerGroup(containerInfo.ContainerGroupName);
-                await client.Entities.SignalEntityAsync(entityId, nameof(ContainersDurableEntity.Delete), containerInfo);
+                try
+                {
+                    await containerManagerService.DeleteContainerGroup(containerInfo.ContainerGroupName);
+                    await client.Entities.SignalEntityAsync(entityId, nameof(ContainersDurableEntity.Delete), containerInfo);
+                }
+                catch (Exception e)
+                {
+                    logger.LogDebug(e, $"Could not delete container group {containerInfo.ContainerGroupName}");
+                }
+
             }
             logger.LogDebug($"Automatically deleted containers over time limit if any existed");
         }

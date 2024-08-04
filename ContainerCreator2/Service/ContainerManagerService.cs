@@ -176,8 +176,17 @@ namespace ContainerCreator2.Service
                 {
                     continue;
                 }
-                var result = await containerGroup.DeleteAsync(WaitUntil.Completed);
-                hasCompleted = hasCompleted && result.HasCompleted;
+                bool result;
+                try
+                {
+                    result = (await containerGroup.DeleteAsync(WaitUntil.Completed)).HasCompleted;
+                }
+                catch (Exception e)
+                {
+                    logger.LogError(e, $"Cannot delete container group containerGroupName");
+                    result = false;
+                }
+                hasCompleted = hasCompleted && result;
             }
             return hasCompleted;
         }
