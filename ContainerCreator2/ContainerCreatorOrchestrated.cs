@@ -49,7 +49,7 @@ namespace ContainerCreator2
                 context.SetCustomStatus($"Failed to start, {containerInfo.ProblemMessage}, {DateTime.UtcNow} UTC");
                 return false;
             }
-            await context.CallActivityAsync<ContainerInfo>(nameof(DeleteContainersOverUserLimitsActivity), containerRequest);
+            await context.CallActivityAsync<ContainerInfo>(nameof(DeleteContainersOverLimitsActivity), containerRequest);
 
             var containerHost = !string.IsNullOrEmpty(containerInfo.Fqdn) ? containerInfo.Fqdn : containerInfo.Ip;
             context.SetCustomStatus(containerInfo);
@@ -85,8 +85,8 @@ namespace ContainerCreator2
             return string.Empty;
         }
 
-        [Function(nameof(DeleteContainersOverUserLimitsActivity))]
-        public async Task DeleteContainersOverUserLimitsActivity([ActivityTrigger] ContainerRequest containerRequest,
+        [Function(nameof(DeleteContainersOverLimitsActivity))]
+        public async Task DeleteContainersOverLimitsActivity([ActivityTrigger] ContainerRequest containerRequest,
             [DurableClient] DurableTaskClient client)
         {
             EntityMetadata<ContainersDurableEntity>? entity = await client.Entities.GetEntityAsync<ContainersDurableEntity>(entityId);
@@ -101,6 +101,18 @@ namespace ContainerCreator2
                 var oldestUsersContainer = containerManagerService.GetOldestContainerForUser(activeContainers, containerRequest.OwnerId);
                 await containerManagerService.DeleteContainerGroup(oldestUsersContainer.ContainerGroupName);
                 await client.Entities.SignalEntityAsync(entityId, nameof(ContainersDurableEntity.Delete), oldestUsersContainer);
+                activeContainers = await containerManagerService.GetContainers();
+            }
+
+            while (containerManagerService.MaxConcurrentContainersTotalReached(activeContainers))
+            {
+                if (containerManagerService.MaxConcurrentContainersTotalEqualsLimit(activeContainers))
+                {
+                    break;
+                }
+                var newestContainer = containerManagerService.GetNewestContainer(activeContainers);
+                await containerManagerService.DeleteContainerGroup(newestContainer.ContainerGroupName);
+                await client.Entities.SignalEntityAsync(entityId, nameof(ContainersDurableEntity.Delete), newestContainer);
                 activeContainers = await containerManagerService.GetContainers();
             }
         }

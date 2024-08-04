@@ -237,6 +237,16 @@ namespace ContainerCreator2.Service
             return new ContainerInfo();
         }
 
+        public ContainerInfo GetNewestContainer(List<ContainerInfo> activeContainers)
+        {
+            var newestContainer = activeContainers.OrderByDescending(c => c.CreatedTime).FirstOrDefault();
+            if (newestContainer != null)
+            {
+                return newestContainer;
+            }
+            return new ContainerInfo();
+        }
+
         public bool UsersContainersLimitReachedOrExceeded(List<ContainerInfo> activeContainers, string ownerId)
         {
             var usersActiveContainers = activeContainers.Where(c => c.OwnerId.ToString() == ownerId).Count();
@@ -260,6 +270,15 @@ namespace ContainerCreator2.Service
         public bool MaxConcurrentContainersTotalReached(List<ContainerInfo> activeContainers)
         {
             if (activeContainers.Count() >= this.maxConcurrentContainersTotal)
+            {
+                return true;
+            }
+            return false;
+        }
+
+        public bool MaxConcurrentContainersTotalEqualsLimit(List<ContainerInfo> activeContainers)
+        {
+            if (activeContainers.Count() == this.maxConcurrentContainersTotal)
             {
                 return true;
             }

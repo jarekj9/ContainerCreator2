@@ -12,6 +12,8 @@ namespace ContainerCreator2.Service.Abstract
         bool UsersContainersLimitReachedOrExceeded(List<ContainerInfo> activeContainers, string ownerId);
         bool MaxConcurrentContainersTotalReached(List<ContainerInfo> activeContainers);
         bool UsersContainersCountEqualsLimit(List<ContainerInfo> activeContainers, string ownerId);
+        bool MaxConcurrentContainersTotalEqualsLimit(List<ContainerInfo> activeContainers);
         ContainerInfo GetOldestContainerForUser(List<ContainerInfo> activeContainers, string ownerId);
+        ContainerInfo GetNewestContainer(List<ContainerInfo> activeContainers);
     }
 }
