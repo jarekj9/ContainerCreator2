@@ -17,6 +17,7 @@ namespace ContainerCreator2.Service
     public class ContainerManagerService : IContainerManagerService
     {
         private readonly ILogger<ContainerManagerService> logger;
+        private readonly IArmClientFactory armClientFactory;
         private readonly IConfiguration configuration;
         private readonly string resourceGroupName;
         private readonly string tenantId;
@@ -27,7 +28,7 @@ namespace ContainerCreator2.Service
         private readonly int maxConcurrentContainersTotal;
         private readonly List<int> containerPorts;
         private readonly int containerLifeTimeMinutes;
-        public ContainerManagerService(ILogger<ContainerManagerService> logger, IConfiguration configuration)
+        public ContainerManagerService(ILogger<ContainerManagerService> logger, IConfiguration configuration, IArmClientFactory armClientFactory)
         {
             this.logger = logger;
             this.configuration = configuration;
@@ -41,6 +42,7 @@ namespace ContainerCreator2.Service
             var ports = this.configuration["ContainerPorts"]?.Split(",") ?? new string[0];
             this.containerPorts = ports.Select(p => int.TryParse(p, out var parsed) ? parsed : 80).ToList();
             this.containerLifeTimeMinutes = int.TryParse(this.configuration["ContainerLifeTimeMinutes"], out var parsedMinutes) ? parsedMinutes : 20;
+            this.armClientFactory = armClientFactory;
         }
 
         public async Task<ContainerInfo> CreateContainer(ContainerRequest containerRequest)
@@ -287,8 +289,7 @@ namespace ContainerCreator2.Service
 
         private async Task<ResourceGroupResource> GetResourceGroup()
         {
-            var clientSecretCredential = new ClientSecretCredential(this.tenantId, this.clientId, this.clientSecret);
-            ArmClient armClient = !string.IsNullOrEmpty(this.clientSecret) ? new ArmClient(clientSecretCredential) : new ArmClient(new ManagedIdentityCredential());
+            var armClient = !string.IsNullOrEmpty(this.clientSecret) ? armClientFactory.GetArmClient(this.tenantId, this.clientId, this.clientSecret) : armClientFactory.GetArmClient();
             var subscription = await armClient.GetSubscriptions().GetAsync(configuration["SubscriptionId"]).ConfigureAwait(false);
             var resourceGroupCollection = subscription.Value.GetResourceGroups();
             var resourceGroup = await resourceGroupCollection.GetAsync(this.resourceGroupName).ConfigureAwait(false);
