@@ -1,13 +1,8 @@
-﻿using Azure;
-using Azure.Core;
-using Azure.Identity;
-using Azure.ResourceManager;
+﻿using Azure.Core;
 using Azure.ResourceManager.ContainerInstance;
 using Azure.ResourceManager.ContainerInstance.Models;
-using Azure.ResourceManager.Resources;
 using ContainerCreator2.Data;
 using ContainerCreator2.Service.Abstract;
-using Microsoft.DurableTask.Entities;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using System.Web;
@@ -17,32 +12,24 @@ namespace ContainerCreator2.Service
     public class ContainerManagerService : IContainerManagerService
     {
         private readonly ILogger<ContainerManagerService> logger;
-        private readonly IArmClientFactory armClientFactory;
         private readonly IConfiguration configuration;
-        private readonly string resourceGroupName;
-        private readonly string tenantId;
-        private readonly string clientId;
-        private readonly string clientSecret;
+        private readonly IAzureAciService azureAciService;
         private readonly string containerImage;
         private readonly int maxConcurrentContainersPerUser;
         private readonly int maxConcurrentContainersTotal;
         private readonly List<int> containerPorts;
         private readonly int containerLifeTimeMinutes;
-        public ContainerManagerService(ILogger<ContainerManagerService> logger, IConfiguration configuration, IArmClientFactory armClientFactory)
+        public ContainerManagerService(ILogger<ContainerManagerService> logger, IConfiguration configuration, IAzureAciService azureAciService)
         {
             this.logger = logger;
             this.configuration = configuration;
-            this.resourceGroupName = this.configuration["ResourceGroupName"] ?? "";
-            this.tenantId = this.configuration["TenantId"] ?? "";
-            this.clientId = this.configuration["ClientId"] ?? "";
-            this.clientSecret = this.configuration["ClientSecret"] ?? "";
             this.containerImage = this.configuration["ContainerImage"] ?? "";
             this.maxConcurrentContainersPerUser = int.TryParse(this.configuration["MaxConcurrentContainersPerUser"], out var parsed) ? parsed : 1;
             this.maxConcurrentContainersTotal = int.TryParse(this.configuration["MaxConcurrentContainersTotal"], out var parsedTotal) ? parsedTotal : 1;
             var ports = this.configuration["ContainerPorts"]?.Split(",") ?? new string[0];
             this.containerPorts = ports.Select(p => int.TryParse(p, out var parsed) ? parsed : 80).ToList();
             this.containerLifeTimeMinutes = int.TryParse(this.configuration["ContainerLifeTimeMinutes"], out var parsedMinutes) ? parsedMinutes : 20;
-            this.armClientFactory = armClientFactory;
+            this.azureAciService = azureAciService;
         }
 
         public async Task<ContainerInfo> CreateContainer(ContainerRequest containerRequest)
@@ -51,29 +38,10 @@ namespace ContainerCreator2.Service
             var containerGroupData = GetContainerGroupData(containerRequest);
             var containerGroupName = $"containergroup-{RandomPasswordGenerator.CreateRandomPassword(8, useSpecialChars: false)}";
 
-            var containerGroupCollection = await GetContainerGroupsFromResourceGroup();
-            var containerResourceGroupResult = await containerGroupCollection.CreateOrUpdateAsync(WaitUntil.Completed, containerGroupName, containerGroupData);
-
-            var fqdn = containerResourceGroupResult?.Value?.Data?.IPAddress?.Fqdn ?? "";
-            var ip = containerResourceGroupResult?.Value?.Data?.IPAddress?.IP.ToString() ?? "";
-            var port = containerResourceGroupResult?.Value?.Data?.IPAddress?.Ports?.FirstOrDefault()?.Port ?? 0;
-            var name = containerResourceGroupResult?.Value?.Data?.Containers?.FirstOrDefault()?.Name ?? "";
-
-            var entityId = new EntityInstanceId(nameof(ContainersDurableEntity), "containers");
-            var containerInfo = new ContainerInfo()
-            {
-                Id = Guid.NewGuid(),
-                ContainerGroupName = containerGroupName,
-                Image = this.containerImage,
-                Name = name,
-                Fqdn = fqdn,
-                Ip = ip,
-                Port = port,
-                OwnerId = Guid.TryParse(containerRequest.OwnerId, out var parsedId) ? parsedId : Guid.Empty,
-                CreatedTime = DateTime.UtcNow,
-                RandomPassword = containerRequest.RandomPassword,
-                IsDeploymentSuccesful = true
-            };
+            var containerInfo = await azureAciService.CreateOrUpdateAsync(containerGroupName, containerGroupData);
+            containerInfo.RandomPassword = containerRequest.RandomPassword;
+            containerInfo.Image = this.containerImage;
+            containerInfo.OwnerId = Guid.TryParse(containerRequest.OwnerId, out var parsedId) ? parsedId : Guid.Empty;
 
             return containerInfo;
         }
@@ -141,7 +109,7 @@ namespace ContainerCreator2.Service
 
         public async Task<List<ContainerInfo>> GetContainers()
         {
-            var containerGroupCollection = await GetContainerGroupsFromResourceGroup();
+            var containerGroupCollection = await azureAciService.GetContainerGroupsFromResourceGroup();
 
             var containerInfos = new List<ContainerInfo>();
             foreach (var containerGroup in containerGroupCollection)
@@ -169,7 +137,7 @@ namespace ContainerCreator2.Service
 
         public async Task<bool> DeleteAllContainerGroups()
         {
-            var containerGroupCollection = await GetContainerGroupsFromResourceGroup();
+            var containerGroupCollection = await azureAciService.GetContainerGroupsFromResourceGroup();
             bool hasCompleted = true;
             foreach (var containerGroup in containerGroupCollection)
             {
@@ -181,7 +149,7 @@ namespace ContainerCreator2.Service
                 bool result;
                 try
                 {
-                    result = (await containerGroup.DeleteAsync(WaitUntil.Completed)).HasCompleted;
+                    result = await azureAciService.DeleteAsync(containerGroupName);
                 }
                 catch (Exception e)
                 {
@@ -197,29 +165,14 @@ namespace ContainerCreator2.Service
         {
             try
             {
-                var containerGroup = await GetContainerByName(containerGroupName);
-                var result = await containerGroup.DeleteAsync(WaitUntil.Completed);
-                return result.HasCompleted;
+                var hasCompleted = await azureAciService.DeleteAsync(containerGroupName);
+                return hasCompleted;
             }
             catch (Exception e)
             {
                 logger.LogWarning(e, $"Cannot delete containerGroupName");
                 return false;
             }
-        }
-
-        private async Task<ContainerGroupCollection> GetContainerGroupsFromResourceGroup()
-        {
-            var resourceGroup = await GetResourceGroup();
-            var containerGroupCollection = resourceGroup.GetContainerGroups();
-            return containerGroupCollection;
-        }
-
-        private async Task<ContainerGroupResource> GetContainerByName(string containerGroupName)
-        {
-            var resourceGroup = await GetResourceGroup();
-            var containerGroup = resourceGroup.GetContainerGroup(containerGroupName);
-            return containerGroup;
         }
 
         public async Task<List<ContainerInfo>> GetContainersOverTimeLimit(int maxMinutes)
@@ -286,15 +239,5 @@ namespace ContainerCreator2.Service
             }
             return false;
         }
-
-        private async Task<ResourceGroupResource> GetResourceGroup()
-        {
-            var armClient = !string.IsNullOrEmpty(this.clientSecret) ? armClientFactory.GetArmClient(this.tenantId, this.clientId, this.clientSecret) : armClientFactory.GetArmClient();
-            var subscription = await armClient.GetSubscriptions().GetAsync(configuration["SubscriptionId"]).ConfigureAwait(false);
-            var resourceGroupCollection = subscription.Value.GetResourceGroups();
-            var resourceGroup = await resourceGroupCollection.GetAsync(this.resourceGroupName).ConfigureAwait(false);
-            return resourceGroup;
-        }
-
     }
 }

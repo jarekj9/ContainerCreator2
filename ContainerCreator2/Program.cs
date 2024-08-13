@@ -12,6 +12,7 @@ var host = new HostBuilder()
         services.ConfigureFunctionsApplicationInsights();
         services.AddSingleton<IContainerManagerService, ContainerManagerService>();
         services.AddSingleton<IArmClientFactory, ArmClientFactory>();
+        services.AddSingleton<IAzureAciService, AzureAciService>();
     })
     .Build();
 
